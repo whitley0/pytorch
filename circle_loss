@@ -1,0 +1,46 @@
+def cos_loss(outputs, labels, alpha=20):
+    device = outputs.device
+
+    flat_labels = labels[:, None] == labels[None, :]
+    triu_mask = torch.triu(torch.ones_like(flat_labels), diagonal=1).to(torch.bool).to(device)
+    flat_labels = flat_labels[triu_mask].view(-1).float()
+
+    cos_sim = F.cosine_similarity(outputs[:, None, :], outputs[None, :, :], dim=-1)
+    cos_sim = cos_sim[triu_mask].view(-1)
+
+    cos_sim = cos_sim * alpha
+    cos_sim = cos_sim[:, None] - cos_sim[None, :]
+
+    y_true = flat_labels[:, None] < flat_labels[None, :]  # 取出负例-正例的差值
+    y_true = y_true.float()
+    cos_sim = cos_sim - (1 - y_true) * 1e12
+    cos_sim = cos_sim.view(-1)
+    cos_sim = torch.cat([torch.tensor([0]).float().to(device), cos_sim], dim=0)
+    return torch.logsumexp(cos_sim, dim=0)
+
+
+def circle_loss(outputs, labels, m=0.25, gamma=20):
+    cos_sim = F.cosine_similarity(outputs[:, None, :], outputs[None, :, :], dim=-1)
+    flat_labels = labels[:, None] == labels[None, :]
+
+    positive_matrix = flat_labels.triu(diagonal=1)
+    negative_matrix = flat_labels.logical_not().triu(diagonal=1)
+
+    cos_sim = cos_sim.view(-1)
+    positive_matrix = positive_matrix.view(-1)
+    negative_matrix = negative_matrix.view(-1)
+
+    sp = cos_sim[positive_matrix]
+    sn = cos_sim[negative_matrix]
+
+    ap = torch.clamp_min(- sp.detach() + 1 + m, min=0.)
+    an = torch.clamp_min(sn.detach() + m, min=0.)
+
+    delta_p = 1 - m
+    delta_n = m
+
+    logit_p = - ap * (sp - delta_p) * gamma
+    logit_n = an * (sn - delta_n) * gamma
+
+    loss = F.softplus(torch.logsumexp(logit_n, dim=0) + torch.logsumexp(logit_p, dim=0))
+    return loss
